@@ -1,0 +1,56 @@
+# Lefthook configuration for VRRP project
+# https://github.com/evilmartians/lefthook
+
+# Skip running hooks in CI environment
+skip_in_ci: true
+
+# Git hooks configuration
+pre-commit:
+  parallel: true
+  commands:
+    goimports:
+      glob: "*.go"
+      run: goimports -w -local github.com/tokuhirom/vrrp-simple {staged_files}
+      stage_fixed: true
+      
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run --fix {staged_files}
+      stage_fixed: true
+      
+    go-mod-tidy:
+      files: go.mod
+      run: go mod tidy
+      stage_fixed: true
+
+pre-push:
+  parallel: false
+  commands:
+    test:
+      run: go test -race -cover ./...
+      
+    build:
+      run: go build -o /tmp/vrrp-test ./main.go && rm /tmp/vrrp-test
+      
+    golangci-lint-all:
+      run: golangci-lint run --no-config --timeout=5m ./...
+
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        # Check commit message format (optional, customize as needed)
+        commit_regex='^(feat|fix|docs|style|refactor|test|chore|build|ci|perf)(\(.+\))?: .{1,100}$'
+        commit_msg=$(cat {1})
+        if ! echo "$commit_msg" | grep -qE "$commit_regex"; then
+          echo "Commit message does not follow conventional format:"
+          echo "  <type>(<scope>): <subject>"
+          echo ""
+          echo "Types: feat, fix, docs, style, refactor, test, chore, build, ci, perf"
+          echo ""
+          echo "Your message: $commit_msg"
+          exit 1
+        fi
+      skip: 
+        - merge
+        - rebase

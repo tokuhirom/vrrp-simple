@@ -1,6 +1,7 @@
 package vrrp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -31,23 +32,25 @@ func (s State) String() string {
 }
 
 type StateMachine struct {
-	mu              sync.RWMutex
-	state           State
-	vrid            uint8
-	priority        uint8
+	mu                    sync.RWMutex
+	state                 State
+	vrid                  uint8
+	priority              uint8
 	advertisementInterval time.Duration
-	masterDownInterval   time.Duration
-	virtualIPs      []net.IP
-	iface           *net.Interface
-	
+	masterDownInterval    time.Duration
+	virtualIPs            []net.IP
+	iface                 *net.Interface
+	ipManager             *IPManager
+	sourceIP              net.IP
+
 	masterDownTimer *time.Timer
 	advertTimer     *time.Ticker
-	
-	sendCh   chan *Packet
-	recvCh   chan *Packet
-	eventCh  chan Event
-	stopCh   chan struct{}
-	
+
+	sendCh  chan *Packet
+	recvCh  chan *Packet
+	eventCh chan Event
+	stopCh  chan struct{}
+
 	onStateChange func(old, new State)
 }
 
@@ -62,21 +65,35 @@ const (
 )
 
 func NewStateMachine(vrid, priority uint8, ips []net.IP, iface *net.Interface) *StateMachine {
-	sm := &StateMachine{
-		state:                Init,
-		vrid:                 vrid,
-		priority:             priority,
-		advertisementInterval: time.Second,
-		virtualIPs:           ips,
-		iface:                iface,
-		sendCh:               make(chan *Packet, 10),
-		recvCh:               make(chan *Packet, 10),
-		eventCh:              make(chan Event, 10),
-		stopCh:               make(chan struct{}),
+	// Get source IP for this interface
+	var sourceIP net.IP
+	addrs, _ := iface.Addrs()
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			if ipv4 := ipnet.IP.To4(); ipv4 != nil {
+				sourceIP = ipv4
+				break
+			}
+		}
 	}
-	
+
+	sm := &StateMachine{
+		state:                 Init,
+		vrid:                  vrid,
+		priority:              priority,
+		advertisementInterval: time.Second,
+		virtualIPs:            ips,
+		iface:                 iface,
+		ipManager:             NewIPManager(iface),
+		sourceIP:              sourceIP,
+		sendCh:                make(chan *Packet, 10),
+		recvCh:                make(chan *Packet, 10),
+		eventCh:               make(chan Event, 10),
+		stopCh:                make(chan struct{}),
+	}
+
 	sm.masterDownInterval = sm.calculateMasterDownInterval()
-	
+
 	return sm
 }
 
@@ -99,9 +116,9 @@ func (sm *StateMachine) calculateMasterDownInterval() time.Duration {
 
 func (sm *StateMachine) Start(ctx context.Context) error {
 	sm.eventCh <- EventStartup
-	
+
 	go sm.run(ctx)
-	
+
 	return nil
 }
 
@@ -123,22 +140,22 @@ func (sm *StateMachine) run(ctx context.Context) {
 		case <-ctx.Done():
 			sm.transition(Init)
 			return
-			
+
 		case <-sm.stopCh:
 			sm.transition(Init)
 			return
-			
+
 		case event := <-sm.eventCh:
 			sm.handleEvent(event)
-			
+
 		case pkt := <-sm.recvCh:
 			sm.handlePacket(pkt)
-			
+
 		case <-sm.masterDownTimerChan():
 			if sm.state == Backup {
 				sm.eventCh <- EventMasterDown
 			}
-			
+
 		case <-sm.advertTimerChan():
 			if sm.state == Master {
 				sm.sendAdvertisement()
@@ -169,15 +186,15 @@ func (sm *StateMachine) handleEvent(event Event) {
 		} else {
 			sm.transition(Backup)
 		}
-		
+
 	case EventShutdown:
 		sm.transition(Init)
-		
+
 	case EventMasterDown:
 		if sm.state == Backup {
 			sm.transition(Master)
 		}
-		
+
 	case EventPriorityZeroReceived:
 		if sm.state == Master {
 			sm.sendAdvertisement()
@@ -189,21 +206,21 @@ func (sm *StateMachine) handlePacket(pkt *Packet) {
 	if pkt.VRID != sm.vrid {
 		return
 	}
-	
+
 	if pkt.Priority == 0 {
 		sm.eventCh <- EventPriorityZeroReceived
 		return
 	}
-	
+
 	switch sm.state {
 	case Backup:
 		if pkt.Priority >= sm.priority {
 			sm.resetMasterDownTimer()
 		}
-		
+
 	case Master:
-		if pkt.Priority > sm.priority || 
-		   (pkt.Priority == sm.priority && sm.compareSourceIP(pkt) > 0) {
+		if pkt.Priority > sm.priority ||
+			(pkt.Priority == sm.priority && sm.compareSourceIP(pkt) < 0) {
 			sm.transition(Backup)
 		}
 	}
@@ -212,44 +229,44 @@ func (sm *StateMachine) handlePacket(pkt *Packet) {
 func (sm *StateMachine) transition(newState State) {
 	sm.mu.Lock()
 	oldState := sm.state
-	
+
 	if oldState == newState {
 		sm.mu.Unlock()
 		return
 	}
-	
+
 	log.Printf("VRID %d: State transition %s -> %s", sm.vrid, oldState, newState)
-	
+
 	switch oldState {
 	case Master:
 		sm.stopAdvertTimer()
 		sm.releaseVirtualIPs()
-		
+
 	case Backup:
 		sm.stopMasterDownTimer()
 	}
-	
+
 	sm.state = newState
-	
+
 	switch newState {
 	case Master:
 		sm.acquireVirtualIPs()
 		sm.sendAdvertisement()
 		sm.startAdvertTimer()
-		
+
 	case Backup:
 		sm.startMasterDownTimer()
-		
+
 	case Init:
 		sm.stopAdvertTimer()
 		sm.stopMasterDownTimer()
 		sm.releaseVirtualIPs()
 	}
-	
+
 	if sm.onStateChange != nil {
 		sm.onStateChange(oldState, newState)
 	}
-	
+
 	sm.mu.Unlock()
 }
 
@@ -284,7 +301,7 @@ func (sm *StateMachine) stopAdvertTimer() {
 
 func (sm *StateMachine) sendAdvertisement() {
 	pkt := NewPacket(VRRPv2, sm.vrid, sm.priority, sm.virtualIPs)
-	
+
 	select {
 	case sm.sendCh <- pkt:
 	default:
@@ -313,15 +330,39 @@ func (sm *StateMachine) releaseVirtualIPs() {
 }
 
 func (sm *StateMachine) addIP(ip net.IP) error {
-	return fmt.Errorf("IP management not implemented")
+	if sm.ipManager == nil {
+		return fmt.Errorf("IP manager not initialized")
+	}
+	return sm.ipManager.AddIP(ip)
 }
 
 func (sm *StateMachine) delIP(ip net.IP) error {
-	return fmt.Errorf("IP management not implemented")
+	if sm.ipManager == nil {
+		return fmt.Errorf("IP manager not initialized")
+	}
+	return sm.ipManager.DelIP(ip)
 }
 
 func (sm *StateMachine) compareSourceIP(pkt *Packet) int {
-	return 0
+	// Compare source IPs for tie-breaking
+	// Returns:
+	//  -1 if packet source IP is greater (packet wins)
+	//   0 if equal
+	//   1 if our source IP is greater (we win)
+
+	if sm.sourceIP == nil {
+		return -1 // No source IP, other wins
+	}
+
+	// We need to extract the source IP from the packet
+	// In a real implementation, this would come from the IP header
+	// For now, compare with the first virtual IP as a proxy
+	if len(pkt.IPAddresses) == 0 {
+		return 1 // No IP in packet, we win
+	}
+
+	// Compare byte by byte
+	return bytes.Compare(sm.sourceIP, pkt.IPAddresses[0])
 }
 
 func (sm *StateMachine) GetSendChannel() <-chan *Packet {

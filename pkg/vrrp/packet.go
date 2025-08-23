@@ -65,12 +65,12 @@ func (p *Packet) Marshal() ([]byte, error) {
 	}
 
 	buf := make([]byte, size)
-	
+
 	buf[0] = (p.Version << 4) | (p.Type & 0x0F)
 	buf[1] = p.VRID
 	buf[2] = p.Priority
 	buf[3] = p.CountIPAddrs
-	
+
 	if p.Version == VRRPv2 {
 		buf[4] = p.AuthType
 		buf[5] = p.AdvInterval
@@ -78,7 +78,7 @@ func (p *Packet) Marshal() ([]byte, error) {
 		buf[4] = (p.AdvInterval >> 4) & 0xF0
 		buf[5] = p.AdvInterval & 0xFF
 	}
-	
+
 	offset := 8
 	for _, ip := range p.IPAddresses {
 		if v4 := ip.To4(); v4 != nil {
@@ -89,14 +89,14 @@ func (p *Packet) Marshal() ([]byte, error) {
 			offset += 16
 		}
 	}
-	
+
 	if p.Version == VRRPv2 && len(p.AuthData) == 8 {
 		copy(buf[offset:], p.AuthData)
 	}
-	
+
 	checksum := p.calculateChecksum(buf)
 	binary.BigEndian.PutUint16(buf[6:8], checksum)
-	
+
 	return buf, nil
 }
 
@@ -104,25 +104,25 @@ func (p *Packet) Unmarshal(data []byte) error {
 	if len(data) < 8 {
 		return fmt.Errorf("packet too short: %d bytes", len(data))
 	}
-	
+
 	p.Version = (data[0] >> 4) & 0x0F
 	p.Type = data[0] & 0x0F
 	p.VRID = data[1]
 	p.Priority = data[2]
 	p.CountIPAddrs = data[3]
-	
+
 	if p.Version == VRRPv2 {
 		p.AuthType = data[4]
 		p.AdvInterval = data[5]
 	} else {
-		p.AdvInterval = ((data[4] & 0x0F) << 8) | data[5]
+		p.AdvInterval = uint8(((uint16(data[4]) & 0x0F) << 8) | uint16(data[5]))
 	}
-	
+
 	p.Checksum = binary.BigEndian.Uint16(data[6:8])
-	
+
 	offset := 8
 	p.IPAddresses = make([]net.IP, p.CountIPAddrs)
-	
+
 	for i := 0; i < int(p.CountIPAddrs); i++ {
 		if p.Version == VRRPv2 || (p.Version == VRRPv3 && len(data[offset:]) >= 4) {
 			if offset+4 > len(data) {
@@ -138,11 +138,11 @@ func (p *Packet) Unmarshal(data []byte) error {
 			offset += 16
 		}
 	}
-	
+
 	if p.Version == VRRPv2 && offset+8 <= len(data) {
 		p.AuthData = data[offset : offset+8]
 	}
-	
+
 	return nil
 }
 
@@ -151,19 +151,19 @@ func (p *Packet) calculateChecksum(data []byte) uint16 {
 	copy(temp, data)
 	temp[6] = 0
 	temp[7] = 0
-	
+
 	var sum uint32
 	for i := 0; i < len(temp)-1; i += 2 {
 		sum += uint32(temp[i])<<8 + uint32(temp[i+1])
 	}
-	
+
 	if len(temp)%2 != 0 {
 		sum += uint32(temp[len(temp)-1]) << 8
 	}
-	
+
 	for (sum >> 16) > 0 {
 		sum = (sum & 0xFFFF) + (sum >> 16)
 	}
-	
+
 	return uint16(^sum)
 }
