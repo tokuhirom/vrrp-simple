@@ -1,4 +1,4 @@
-.PHONY: all build test clean install uninstall integration-test test-all
+.PHONY: all build test clean install uninstall integration-test test-all lxc-integration-test
 
 # Variables
 BINARY_NAME := vrrp
@@ -33,10 +33,18 @@ integration-test:
 	@chmod +x test/integration/scripts/*.sh
 	@./test/integration/scripts/run_integration_tests.sh
 
-# Run all tests (unit + integration)
+# Run LXC integration tests (REAL VIP testing with full network stack)
+lxc-integration-test:
+	@echo "Running LXC-based VIP movement integration tests..."
+	@chmod +x test/lxc/run-lxc-tests.sh
+	@sudo ./test/lxc/run-lxc-tests.sh
+
+# Run all tests (unit + integration + lxc)
 test-all: test
-	@echo "Running integration tests (requires root)..."
+	@echo "Running namespace integration tests (requires root)..."
 	@sudo $(MAKE) integration-test
+	@echo "Running LXC VIP movement tests..."
+	@$(MAKE) lxc-integration-test
 
 # Clean build artifacts
 clean:
@@ -66,7 +74,7 @@ fmt:
 # Run linters
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./...; \
+		golangci-lint run --no-config ./...; \
 	else \
 		echo "golangci-lint not installed. Install with:"; \
 		echo "  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin"; \
@@ -88,30 +96,28 @@ security:
 dev: build
 	sudo ./$(BINARY_NAME) run --interface lo --vrid 10 --priority 100 --vips 127.0.0.100
 
-# Docker build
-docker-build:
-	docker build -t vrrp-simple:latest .
-
-# Docker run
-docker-run:
-	docker run --rm --network host --cap-add NET_ADMIN vrrp-simple:latest
+# LXC test environment setup (interactive)
+lxc-setup:
+	@echo "Running interactive LXC test setup..."
+	@chmod +x test/lxc/setup-lxc-test.sh
+	@sudo ./test/lxc/setup-lxc-test.sh
 
 # Show help
 help:
 	@echo "Available targets:"
-	@echo "  make build           - Build the VRRP binary"
-	@echo "  make test            - Run unit tests"
-	@echo "  make test-coverage   - Run tests with coverage report"
-	@echo "  make integration-test- Run integration tests (requires root)"
-	@echo "  make test-all        - Run all tests (unit + integration)"
-	@echo "  make clean           - Remove build artifacts"
-	@echo "  make install         - Install binary to system"
-	@echo "  make uninstall       - Remove binary from system"
-	@echo "  make fmt             - Format Go code"
-	@echo "  make lint            - Run linters"
-	@echo "  make vet             - Run go vet"
-	@echo "  make security        - Run security scanner"
-	@echo "  make dev             - Run in development mode"
-	@echo "  make docker-build    - Build Docker image"
-	@echo "  make docker-run      - Run Docker container"
-	@echo "  make help            - Show this help message"
+	@echo "  make build                 - Build the VRRP binary"
+	@echo "  make test                  - Run unit tests"
+	@echo "  make test-coverage         - Run tests with coverage report"
+	@echo "  make integration-test      - Run namespace integration tests (requires root)"
+	@echo "  make lxc-integration-test  - Run LXC VIP movement tests (requires root)"
+	@echo "  make lxc-setup             - Interactive LXC test environment setup"
+	@echo "  make test-all              - Run all tests (unit + integration + lxc)"
+	@echo "  make clean                 - Remove build artifacts"
+	@echo "  make install               - Install binary to system"
+	@echo "  make uninstall             - Remove binary from system"
+	@echo "  make fmt                   - Format Go code"
+	@echo "  make lint                  - Run linters"
+	@echo "  make vet                   - Run go vet"
+	@echo "  make security              - Run security scanner"
+	@echo "  make dev                   - Run in development mode"
+	@echo "  make help                  - Show this help message"
