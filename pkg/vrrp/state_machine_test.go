@@ -227,7 +227,7 @@ func TestByteComparison(t *testing.T) {
 		t.Error("192.168.1.2 should be greater than 192.168.1.1")
 	}
 
-	if bytes.Compare(ip1, ip3) != 0 {
+	if !ip1.Equal(ip3) {
 		t.Error("Same IPs should compare equal")
 	}
 }

@@ -25,7 +25,9 @@ func TestIPManager(t *testing.T) {
 	if err := netlink.LinkAdd(dummy); err != nil {
 		t.Fatalf("Failed to create dummy interface: %v", err)
 	}
-	defer netlink.LinkDel(dummy)
+	defer func() {
+		_ = netlink.LinkDel(dummy)
+	}()
 
 	// Bring the interface up
 	if err := netlink.LinkSetUp(dummy); err != nil {

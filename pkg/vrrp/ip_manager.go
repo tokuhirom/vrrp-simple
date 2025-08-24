@@ -121,8 +121,8 @@ func (m *IPManager) SetArpReply(enable bool) error {
 	settings := map[string]string{
 		fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/arp_ignore", m.iface.Name):   "1",
 		fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/arp_announce", m.iface.Name): "2",
-		fmt.Sprintf("/proc/sys/net/ipv4/conf/all/arp_ignore"):                "1",
-		fmt.Sprintf("/proc/sys/net/ipv4/conf/all/arp_announce"):              "2",
+		"/proc/sys/net/ipv4/conf/all/arp_ignore":                             "1",
+		"/proc/sys/net/ipv4/conf/all/arp_announce":                           "2",
 	}
 
 	if !enable {
